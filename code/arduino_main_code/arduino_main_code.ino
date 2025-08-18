@@ -12,32 +12,48 @@
 - move to visual studio code
 - move to multifile setup
 - fix motor angle counting (make it elegant)
-- add more comments
 - multiplatforming for different types of arduino, with tables in different files
 
 */
 
+volatile uint8_t lastPinD = 0;
 
 class LegoMotor {
 
   private:
   bool tacho_available;
+  bool motor_available;
+
+  bool validate_tacho(uint8_t _pin) {
+
+    // int map_length = sizeof(interuptMap) / sizeof(interuptMap[0]); // error: invalid application of 'sizeof' to incomplete type 'LegoMotor* []'
+    int map_length = 8;
+    if (_pin > map_length) { return false; }
+    if (_pin <= 0) { return false; } // Check if pin is outside of the map's range
+
+    // TODO: check if port on list of possible ports
+
+    if (interuptMap[_pin] != nullptr) { return false; } // Check if port is occupied
+
+    return true;
+  }
 
   public:
 
   static LegoMotor* interuptMap[]; 
-  // Maps blue port of every object to the object; ISR then adds interupt to those ports calling CountDegrees() for angle counting 
+  // Maps blue port of every object to the object; ISR then adds interupt to those ports calling count_degrees() for angle counting 
   // In future consider mapping only to function and not entire object
 
   // NOTE: I just realized that it may be faster to do the counting inside ISR funtion which could be just messing with object variables instead of calling another function
 
 
-  volatile long absolute_degrees = 0; // Keeps track of how many degrees has the motor rotated so far
-  int port_1, port_2, port_en, port_yellow, port_blue;
+  volatile long absolute_degrees; // Keeps track of how many degrees has the motor rotated so far
+
+  int port_1, port_2, port_en, port_yellow, port_blue; // TODO: change to uint8_t ?
   
 
   LegoMotor(int _port_1, int _port_2, int _port_en, int _port_yellow, int _port_blue) {
-    // When ports blue and yellow specified enable tachometer
+    // When ports blue and yellow are specified enable tachometer
     
     pinMode(_port_en, OUTPUT);
     pinMode(_port_1, OUTPUT);
@@ -51,20 +67,39 @@ class LegoMotor {
     port_yellow = _port_yellow;
     port_blue = _port_blue;
 
-    tacho_available = true; 
+    absolute_degrees = 0;
+
+    tacho_available = true; // NOTE: tacho_available should not be true until tacho setup
     
+    // Tacho setup:
     
     /*
 
     =========TODO:=========
 
-    - check if port is occupied on the list and valid
+    - check if port is occupied on the list and valid - DONE
     - find port group
     - enable group if not enabled already
     - enable interupt on pin
     - map to the list
     
     */
+  
+    validate_tacho(port_blue);
+
+    if (port_blue == 2) {
+      // Pin change interrupt request 0
+      // Port group D
+
+
+    }
+
+    // After setting up tachometer
+
+    lastPinD = PIND;
+
+    tacho_available = true;
+
     
   }
 
@@ -79,10 +114,14 @@ class LegoMotor {
     port_yellow = -1;
     port_blue = -1;
 
+    absolute_degrees = 0;
+
     tacho_available = false; 
   }
 
-  void CountDegrees() {
+
+  // This function is called every time digitalRead(this->port_blue) changes indicating that motor has rotated by one degree in any direction
+  void count_degrees() {
   if (tacho_available) {
 
     // Check for direction of motion
@@ -93,6 +132,7 @@ class LegoMotor {
     }
 
   }}
+
 
   // Functions for movement motors
 
@@ -129,20 +169,34 @@ class LegoMotor {
   
 };
 
+// Last known state of PIND (pins 0-7)
+
+
 LegoMotor motor = LegoMotor(GATE_MOTO1, GATE_MOTO2, GATE_MOTEN, YELLOWPIN, BLUEPIN);
+
+LegoMotor* LegoMotor::interuptMap[8] = { nullptr };
 
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
-  // attachInterrupt(digitalPinToInterrupt(motor.port_blue), motor.CountDegrees, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(motor.port_blue), motor.CountDegrees, CHANGE); // DEPRECATED (found to be impractical to do with objects)
 
   motor.move(-80);
 }
 
 void loop() {
-  Serial.println(degrees);
+  Serial.println(motor.absolute_degrees);
+  delay(50);
+}
 
+ISR(PCINT0_vect) {
+  if((PIND & (1 << 2)) !=  // bit 2 of PIND
+  (lastPinD & (1 << 2))    // last bit 2 of PIND
+  ){
+    lastPinD = PIND;
+    LegoMotor::interuptMap[2]->count_degrees();
+  }
 }
 
 
