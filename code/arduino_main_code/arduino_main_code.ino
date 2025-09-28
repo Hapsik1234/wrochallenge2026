@@ -8,7 +8,7 @@
 /*
 ==========TODO:===========
 
-- check if motor is present (don't count to infinity)
+- check if motor is present (don't count to infinity) - propably by hardware
 - move to visual studio code
 - move to multifile setup
 - fix motor angle counting (make it elegant)
@@ -90,6 +90,12 @@ class LegoMotor {
     if (port_blue == 2) {
       // Pin change interrupt request 0
       // Port group D
+
+      PCICR |= (1 << PCIE0);        // Enable interrupt group 0 (PCINT0_vect)
+
+      PCMSK0 |= (1 << PCINT2);      // Enable pin D9
+
+      interuptMap[2] = this;
 
 
     }
@@ -175,7 +181,6 @@ class LegoMotor {
 LegoMotor motor = LegoMotor(GATE_MOTO1, GATE_MOTO2, GATE_MOTEN, YELLOWPIN, BLUEPIN);
 
 LegoMotor* LegoMotor::interuptMap[8] = { nullptr };
-
 
 void setup() {
   Serial.begin(115200);
