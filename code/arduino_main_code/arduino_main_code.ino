@@ -104,6 +104,13 @@ public:
 
     tacho_available = true;
   }
+// y b = 1 0
+/*
+00
+10
+11
+01
+*/
 
   LegoMotor(int _port_1, int _port_2, int _port_en) {
     pinMode(_port_en, OUTPUT);
@@ -127,7 +134,9 @@ public:
     if (tacho_available) {
 
       // Check for direction of motion
-      if (digitalRead(port_yellow) == digitalRead(port_blue)) {
+
+      // port_yellow, port_blue
+      if (digitalRead(3) == digitalRead(9)) {
         absolute_degrees++;
       } else {
         absolute_degrees--;
@@ -172,16 +181,18 @@ public:
 // Last known state of PIND (pins 0-7)
 
 
-LegoMotor motor = LegoMotor(GATE_MOTO1, GATE_MOTO2, GATE_MOTEN, YELLOWPIN, BLUEPIN);
-
 LegoMotor* LegoMotor::interuptMap[8] = { nullptr };
+
+LegoMotor motor = LegoMotor(GATE_MOTO1, GATE_MOTO2, GATE_MOTEN, YELLOWPIN, BLUEPIN);
 
 void setup() {
   Serial.begin(115200);
 
   // attachInterrupt(digitalPinToInterrupt(motor.port_blue), motor.CountDegrees, CHANGE); // DEPRECATED (found to be impractical to do with objects)
 
-  motor.move(-80);
+  motor.move(-30);
+  delay(1000);
+  motor.stop();
 }
 
 void loop() {
@@ -190,9 +201,11 @@ void loop() {
   delay(50);
 }
 
+
+
 ISR(PCINT0_vect) {
 
-
+  
 
   if ((PINB & (1 << 1)) !=  // bit 2 of PIND
     (lastPinB & (1 << 1))  // last bit 2 of PIND
