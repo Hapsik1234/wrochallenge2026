@@ -1,0 +1,1 @@
+Write-Output "rm /home/pi/programs/*" "put -r * /home/pi/programs" | sftp pi@raspberrypi.local

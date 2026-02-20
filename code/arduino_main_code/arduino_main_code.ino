@@ -4,24 +4,54 @@
 #define YELLOWPIN 6
 #define BLUEPIN 2
 
+#define pin 10
 
 /*
 ==========TODO:===========
 
-- check if motor is present (don't count to infinity) - propably by hardware
+- DONE: check if motor is present (don't count to infinity) - propably by hardware
 - move to visual studio code
 - move to multifile setup
-- fix motor angle counting (make it elegant)
+- DONE: fix motor angle counting (make it elegant)
 - multiplatforming for different types of arduino, with tables in different files
+- add debounce to ISR for antighosting
 
 */
 
-volatile uint8_t lastPinB = 0;
+int pinToPCINTbit[60];
+int pinToPCIE[60];
+uint8_t *pinToPCMSK[60]; // Unsure if this should be volatile
+const int PCINTG0ports[8][2] = {
+  { PCINT0, 53 },
+  { PCINT1, 52 },
+  { PCINT2, 51 },
+  { PCINT3, 50 },
+  { PCINT4, 10 },
+  { PCINT5, 11 },
+  { PCINT6, 12 },
+  { PCINT7, 13 }
+};
+
+volatile uint8_t lastPINB = 0;
+volatile uint8_t lastPIND = 0;
+
+volatile uint8_t snapshotPINB = 0;
+volatile uint8_t snapshotPIND = 0;
+volatile uint8_t snapshotPINH = 0;
+
+// TODO: make it static member of LegoMotor
+uint8_t* regToSnapshot(volatile uint8_t* reg) {
+  if (reg == &PINB) { return &snapshotPINB; }
+  if (reg == &PIND) { return &snapshotPIND; }
+  if (reg == &PINH) { return &snapshotPINH; }
+  else { return nullptr; }
+}
+
 
 class LegoMotor {
 
 private:
-  bool tacho_available;
+  
   bool motor_available;
 
   bool validate_tacho(uint8_t _pin) {
@@ -31,7 +61,7 @@ private:
     if (_pin > map_length) { return false; }
     if (_pin <= 0) { return false; }  // Check if pin is outside of the map's range
 
-    // TODO: check if port on list of possible ports
+    // TODO: check if port on list of possible ports, we can omit this - nothing will happen
 
     if (interuptMap[_pin] != nullptr) { return false; }  // Check if port is occupied
 
@@ -39,12 +69,15 @@ private:
   }
 
 public:
+  bool tacho_available; // TODO: Make private and add a getter
+  // uint8_t *reg;
+  // uint8_t bit;
 
-  static LegoMotor* interuptMap[];
+
   // Maps blue port of every object to the object; ISR then adds interupt to those ports calling count_degrees() for angle counting
-  // In future consider mapping only to function and not entire object
+  static LegoMotor* interuptMap[];
+  // volatile static int maskPINB; // To be used in future, NOTE: I have no idea what I have meant by that comment
 
-  // NOTE: I just realized that it may be faster to do the counting inside ISR funtion which could be just messing with object variables instead of calling another function
 
 
   volatile long absolute_degrees;  // Keeps track of how many degrees has the motor rotated so far
@@ -55,11 +88,19 @@ public:
   LegoMotor(int _port_1, int _port_2, int _port_en, int _port_yellow, int _port_blue) {
     // When ports blue and yellow are specified enable tachometer
 
+    // Appending maps
+    // TODO: predefine entire lookup table
+    fill_lookups();
+
+    lastPINB = PINB;
+    lastPIND = PIND;
+
+
     pinMode(_port_en, OUTPUT);
     pinMode(_port_1, OUTPUT);
     pinMode(_port_2, OUTPUT);
-    pinMode(_port_yellow, INPUT);
-    pinMode(_port_blue, INPUT);
+    pinMode(_port_yellow, INPUT_PULLUP);
+    pinMode(_port_blue, INPUT_PULLUP);
 
     port_1 = _port_1;
     port_2 = _port_2;
@@ -67,9 +108,12 @@ public:
     port_yellow = _port_yellow;
     port_blue = _port_blue;
 
-    absolute_degrees = 0;
+    // uint8_t port = digitalPinToPort(_port_blue);
+    // reg = portInputRegister(port);
 
-    tacho_available = true;  // NOTE: tacho_available should not be true until tacho setup
+    // bit = digitalPinToBitMask(_port_blue);
+
+    absolute_degrees = 0;
 
     // Tacho setup:
 
@@ -87,32 +131,31 @@ public:
 
     validate_tacho(port_blue);
 
-    if (port_blue == 2) {
+    if (port_blue == 10) {
       // Pin change interrupt request 0
       // Port group D
 
-      PCICR |= (1 << PCIE0);  // Enable interrupt group 0 (PCINT0_vect)
+      PCICR |= (1 << pinToPCIE[port_blue]);  // Enable interrupt group 0 (PCINT0_vect)
+      
+      *pinToPCMSK[port_blue] |= (1 << pinToPCINTbit[port_blue]);  // Enable pin D10
 
-      PCMSK0 |= (1 << PCINT2);  // Enable pin D9
+      interuptMap[port_blue] = this;
 
-      interuptMap[2] = this;
+      sei();
     }
 
     // After setting up tachometer
 
-    lastPinB = PINB;
-
     tacho_available = true;
   }
-// y b = 1 0
-/*
-00
-10
-11
-01
-*/
+
 
   LegoMotor(int _port_1, int _port_2, int _port_en) {
+
+    // Appending maps
+    // TODO: predefine entire lookup table
+    fill_lookups();
+
     pinMode(_port_en, OUTPUT);
     pinMode(_port_1, OUTPUT);
     pinMode(_port_2, OUTPUT);
@@ -128,24 +171,68 @@ public:
     tacho_available = false;
   }
 
+  void fill_lookups() {
+    pinToPCINTbit[53] = PCINT0;
+    pinToPCINTbit[52] = PCINT1;
+    pinToPCINTbit[51] = PCINT2;
+    pinToPCINTbit[50] = PCINT3;
 
-  // This function is called every time digitalRead(this->port_blue) changes indicating that motor has rotated by one degree in any direction
-  void count_degrees() {
+    pinToPCINTbit[10] = PCINT4;
+    pinToPCINTbit[11] = PCINT5;
+    pinToPCINTbit[12] = PCINT6;
+    pinToPCINTbit[13] = PCINT7;
+    
+    pinToPCIE[53] = PCIE0;
+    pinToPCIE[52] = PCIE0;
+    pinToPCIE[51] = PCIE0;
+    pinToPCIE[50] = PCIE0;
+
+    pinToPCIE[10] = PCIE0;
+    pinToPCIE[11] = PCIE0;
+    pinToPCIE[12] = PCIE0;
+    pinToPCIE[13] = PCIE0;
+
+    pinToPCMSK[53] = &PCMSK0;
+    pinToPCMSK[52] = &PCMSK0;
+    pinToPCMSK[51] = &PCMSK0;
+    pinToPCMSK[50] = &PCMSK0;
+
+    pinToPCMSK[10] = &PCMSK0;
+    pinToPCMSK[11] = &PCMSK0;
+    pinToPCMSK[12] = &PCMSK0;
+    pinToPCMSK[13] = &PCMSK0;
+  }
+
+  // This function is called every time digitalRead(this->port_blue) changes, indicating that motor has rotated by one degree in any direction
+  void handle_rotation() {
     if (tacho_available) {
 
       // Check for direction of motion
 
-      // port_yellow, port_blue
-      if (digitalRead(3) == digitalRead(9)) {
+      // TODO: define as attributes of LegoMotor
+      uint8_t port = digitalPinToPort(port_blue);
+      uint8_t *register_blue = portInputRegister(port);
+      
+      uint8_t *snapshot_blue = regToSnapshot(register_blue);
+      uint8_t bit_blue = pinToPCINTbit[10];
+
+      bool l_h = *snapshot_blue & (1<<bit_blue);
+      bool b = snapshotPINH & (1<<3);
+
+      bool h_l = !l_h;
+
+      if (h_l ^ b) {
         absolute_degrees++;
       } else {
         absolute_degrees--;
       }
+
+      Serial.println("degrees:" + String(10*absolute_degrees));
     }
   }
 
 
-  // Functions for movement motors
+  // Functions for movement of the motor
 
   void move(int speed) {
 
@@ -181,13 +268,21 @@ public:
 // Last known state of PIND (pins 0-7)
 
 
-LegoMotor* LegoMotor::interuptMap[8] = { nullptr };
+LegoMotor* LegoMotor::interuptMap[60] = { nullptr };
 
-LegoMotor motor = LegoMotor(GATE_MOTO1, GATE_MOTO2, GATE_MOTEN, YELLOWPIN, BLUEPIN);
+LegoMotor motor = LegoMotor(GATE_MOTO1, GATE_MOTO2, GATE_MOTEN, YELLOWPIN, pin);
 
 void setup() {
-  Serial.begin(115200);
 
+  Serial.begin(2000000);
+  // Serial.begin(9600);
+
+  Serial.println(PCINTG0ports[0][0]);
+
+  
+
+  pinMode(10, INPUT_PULLUP);
+  pinMode(9, OUTPUT);
   // attachInterrupt(digitalPinToInterrupt(motor.port_blue), motor.CountDegrees, CHANGE); // DEPRECATED (found to be impractical to do with objects)
 
   motor.move(-30);
@@ -196,149 +291,56 @@ void setup() {
 }
 
 void loop() {
-  Serial.println(motor.absolute_degrees);
+  // Serial.println(motor.absolute_degrees);
   // Serial.println("  " + String(PINB, BIN));
+  // Serial.println(motor.tacho_available);
+
+
+  // Toggle pin D9
+  PORTH |= (1 << PH6);
+  PORTH &= ~(1 << PH6);
+
+  // Serial.println("PINH:" + String(PINH));
+  // Serial.println("PINB:" + String(PINB));
+  // Serial.println("degrees:" + String(10*motor.absolute_degrees));
+
   delay(50);
 }
 
 
-
 ISR(PCINT0_vect) {
 
+  // Snapshot all registers
+  snapshotPINB = PINB;
+  snapshotPIND = PIND;
+  snapshotPINH = PINH;
+
+  // Calculate change mask
+  int changePINB = lastPINB ^ snapshotPINB;
+  changePINB = changePINB & PCMSK0;
   
+  // Update last state
+  lastPINB = snapshotPINB;
+  // Serial.println("Change:" + String(changePINB, BIN));
 
-  if ((PINB & (1 << 1)) !=  // bit 2 of PIND
-    (lastPinB & (1 << 1))  // last bit 2 of PIND
-  ) {
-    lastPinB = PINB;
+  // TODO: add a for and lookup table for all pins
+  
+  for(int i=0;i<8;i++) {
+    // Serial.print(PCINTG0ports[i][0]);
+    // Serial.print(" ");
+    // Serial.println(PCINTG0ports[i][1]);
 
-    // Serial.println("b:" + String(PINB, BIN));
-
-    // LegoMotor::interuptMap[2]->absolute_degrees++;
-    LegoMotor::interuptMap[2]->count_degrees();
+    // TODO: expand to more lines to make it readable
+    if (changePINB & (1 << PCINTG0ports[i][0])) { LegoMotor::interuptMap[PCINTG0ports[i][1]]->handle_rotation(); }
   }
-  // else {
-  //   Serial.println("a:" + String(PINB, BIN));
-  // }
+
+  // if (changePINB & (1 << PCINT0)) { LegoMotor::interuptMap[4]->count_degrees(); }
+  // if (changePINB & (1 << PCINT1)) { LegoMotor::interuptMap[4]->count_degrees(); }
+  // if (changePINB & (1 << PCINT2)) { LegoMotor::interuptMap[4]->count_degrees(); }
+  // if (changePINB & (1 << PCINT3)) { LegoMotor::interuptMap[4]->count_degrees(); }
+  // if (changePINB & (1 << PCINT4)) { LegoMotor::interuptMap[10]->count_degrees(); } // else {Serial.println("NOW"); } // D10
+  // if (changePINB & (1 << PCINT5)) { LegoMotor::interuptMap[4]->count_degrees(); }
+  // if (changePINB & (1 << PCINT6)) { LegoMotor::interuptMap[4]->count_degrees(); }
+  // if (changePINB & (1 << PCINT7)) { LegoMotor::interuptMap[4]->count_degrees(); }
+
 }
-
-
-// ===================== THIS IS A CODE COPIED FROM CHATGPT SERVING AS REFERENCE =====================
-
-// #define GATE_MOTEN 5
-// #define GATE_MOTO1 4
-// #define GATE_MOTO2 3
-
-// #define YELLOWPIN 6
-// #define BLUEPIN 62  // A8 on Arduino Mega (digital pin 62)
-
-// class LegoMotor;
-
-// // Global table mapping encoder pin to motor object
-// LegoMotor* motorMap[70] = { nullptr };
-
-// // Last known state of PORTK (pins 62–69 = A8–A15)
-// volatile uint8_t lastPinKState = 0;
-
-// class LegoMotor {
-// private:
-//   bool tacho_available;
-
-// public:
-//   int port_1, port_2, port_en, port_yellow, port_blue;
-//   volatile long degrees;
-
-//   LegoMotor(int _port_1, int _port_2, int _port_en, int _port_yellow, int _port_blue) {
-//     port_1 = _port_1;
-//     port_2 = _port_2;
-//     port_en = _port_en;
-//     port_yellow = _port_yellow;
-//     port_blue = _port_blue;
-//     degrees = 0;
-
-//     pinMode(port_1, OUTPUT);
-//     pinMode(port_2, OUTPUT);
-//     pinMode(port_en, OUTPUT);
-//     pinMode(port_yellow, INPUT);
-//     pinMode(port_blue, INPUT);
-
-//     tacho_available = true;
-
-//     // Map this object to the encoder pin
-//     motorMap[port_blue] = this;
-
-//     // Enable PCINT for PCINT group 2 (PORTK, pins 62–69)
-//     PCICR |= (1 << PCIE2);  // Enable PCINT2 interrupt group
-//     PCMSK2 |= (1 << (port_blue - 62));  // Enable interrupt for this pin in PCMSK2
-
-//     // Initialize lastPinKState if needed
-//     lastPinKState = PIND;
-//   }
-
-//   void CountDegrees() {
-//     if (tacho_available) {
-//       if (digitalRead(port_yellow) == digitalRead(port_blue)) {
-//         degrees++;
-//       } else {
-//         degrees--;
-//       }
-//     }
-//   }
-
-//   void move(int speed) {
-//     if (speed > 100) speed = 100;
-//     if (speed < -100) speed = -100;
-
-//     analogWrite(port_en, int(abs(speed) * 2.55));
-
-//     if (speed > 0) {
-//       digitalWrite(port_1, HIGH);
-//       digitalWrite(port_2, LOW);
-//     } else {
-//       digitalWrite(port_1, LOW);
-//       digitalWrite(port_2, HIGH);
-//     }
-//   }
-
-//   void stop() {
-//     digitalWrite(port_1, LOW);
-//     digitalWrite(port_2, LOW);
-//   }
-
-//   void stop_brakes() {
-//     digitalWrite(port_1, LOW);
-//     digitalWrite(port_2, LOW);
-//     digitalWrite(port_en, LOW);
-//   }
-// };
-
-// // Create one motor for demo
-// LegoMotor motor(GATE_MOTO1, GATE_MOTO2, GATE_MOTEN, YELLOWPIN, BLUEPIN);
-
-// void setup() {
-//   Serial.begin(9600);
-//   motor.move(80);
-//   delay(3000);
-//   motor.stop();
-// }
-
-// void loop() {
-//   Serial.println(motor.degrees);
-//   delay(100);
-// }
-
-// // ISR for PCINT2 group (PORTK = A8 to A15 = pins 62–69)
-// ISR(PCINT2_vect) {
-//   uint8_t newState = PIND;
-//   uint8_t changed = newState ^ lastPinKState;
-//   lastPinKState = newState;
-
-//   for (int pin = 62; pin <= 67; pin++) {
-//     uint8_t mask = 1 << (pin - 62);
-//     if (changed & mask) {
-//       if (motorMap[pin]) {
-//         motorMap[pin]->CountDegrees();
-//       }
-//     }
-//   }
-// }
